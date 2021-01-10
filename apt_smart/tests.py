@@ -61,6 +61,14 @@ class AptMirrorUpdaterTestCase(TestCase):
         for candidate in mirrors:
             check_ubuntu_mirror(candidate.mirror_url)
 
+    def test_linuxmint_mirror_discovery(self):
+        """Test the discovery of Linux Mint mirror URLs."""
+        from apt_smart.backends.linuxmint import discover_mirrors
+        mirrors = discover_mirrors()
+        assert len(mirrors) > 10
+        for candidate in mirrors:
+            check_ubuntu_mirror(candidate.mirror_url)
+
     def test_adaptive_mirror_discovery(self):
         """Test the discovery of mirrors for the current type of system."""
         updater = AptMirrorUpdater()
@@ -91,6 +99,14 @@ class AptMirrorUpdaterTestCase(TestCase):
             return self.skipTest("root privileges required to opt in")
         updater = AptMirrorUpdater()
         updater.create_chroot('/test_chroot')
+        assert 'Filename:' in updater.context.capture('apt-cache', 'show', 'python')
+
+    def test_create_chroot_with_codename(self):
+        """Test create chroot with codename"""
+        if os.getuid() != 0:
+            return self.skipTest("root privileges required to opt in")
+        updater = AptMirrorUpdater()
+        updater.create_chroot('/test_chroot_stretch', 'stretch')
         assert 'Filename:' in updater.context.capture('apt-cache', 'show', 'python')
 
     def test_change_mirror(self):
@@ -152,23 +168,76 @@ class AptMirrorUpdaterTestCase(TestCase):
         # Check that a reasonable number of Debian and Ubuntu releases was discovered.
         assert len([r for r in releases if r.distributor_id == 'debian']) > 10
         assert len([r for r in releases if r.distributor_id == 'ubuntu']) > 10
+        assert len([r for r in releases if r.distributor_id == 'linuxmint']) > 10
         # Check that LTS releases of Debian as well as Ubuntu were discovered.
         assert any(r.distributor_id == 'debian' and r.is_lts for r in releases)
         assert any(r.distributor_id == 'ubuntu' and r.is_lts for r in releases)
+        assert any(r.distributor_id == 'linuxmint' and r.is_lts for r in releases)
         # Sanity check against duplicate releases.
         assert sum(r.series == 'bionic' for r in releases) == 1
         assert sum(r.series == 'jessie' for r in releases) == 1
+        assert sum(r.series == 'tina' for r in releases) == 1
         # Sanity check some known LTS releases.
         assert any(r.series == 'bionic' and r.is_lts for r in releases)
         assert any(r.series == 'stretch' and r.is_lts for r in releases)
+        assert any(r.series == 'tina' and r.is_lts for r in releases)
+
+    def test_discover_linuxmint_releases(self):
+        """Test that release discovery works properly."""
+        import decimal
+        from bs4 import BeautifulSoup
+        from apt_smart.releases import discover_linuxmint_releases, table_to_2d
+        from apt_smart.http import fetch_url
+        from humanfriendly.terminal import output
+
+        url = 'https://en.wikipedia.org/wiki/Linux_Mint_version_history'
+        response = fetch_url(url, timeout=15, retry=True)
+        soup = BeautifulSoup(response, 'html.parser')
+        indent = " " * 4
+        releases = set()
+        tables = soup.findAll('table')
+        if not tables:
+            raise Exception("Failed to locate <table> element in page %s" % url)
+        else:
+            output("\nBUNDLED_RELEASES = [\n")
+            for release in discover_linuxmint_releases(table_to_2d(tables[1])):
+                releases.add(release)
+                output(indent + "Release(\n")
+                for name in release.find_properties(cached=False):
+                    value = getattr(release, name)
+                    if value is not None:
+                        if isinstance(value, decimal.Decimal):
+                            # It seems weirdly inconsistency to me that this is needed
+                            # for decimal.Decimal() but not for datetime.date() but I
+                            # guess the simple explanation is that repr() output simply
+                            # isn't guaranteed to be accepted by eval().
+                            value = "decimal." + repr(value)
+                        else:
+                            value = repr(value)
+                        output(indent * 2 + name + "=" + value + ",\n")
+                output(indent + "),\n")
+            output("]\n\n")
+
+            # Check that a reasonable number of Debian and Ubuntu releases was discovered.
+            assert len(releases) > 10
+            assert len([r for r in releases if r.distributor_id == 'linuxmint']) > 10
+            # Check that LTS releases of Debian as well as Ubuntu were discovered.
+            assert any(r.distributor_id == 'linuxmint' and r.is_lts for r in releases)
+            # Sanity check against duplicate releases.
+            assert sum(r.series == 'tina' for r in releases) == 1
+            # Sanity check some known LTS releases.
+            assert any(r.series == 'tina' and r.is_lts for r in releases)
 
     def test_coerce_release(self):
         """Test the coercion of release objects."""
         # Test coercion of short code names.
         assert coerce_release('lucid').version == decimal.Decimal('10.04')
+        assert coerce_release('tina').version == decimal.Decimal('19.2')
         assert coerce_release('woody').distributor_id == 'debian'
+        assert coerce_release('tina').distributor_id == 'linuxmint'
         # Test coercion of version numbers.
         assert coerce_release('10.04').series == 'lucid'
+        assert coerce_release('19.2').series == 'tina'
 
     def test_keyring_selection(self):
         """Make sure keyring selection works as intended."""

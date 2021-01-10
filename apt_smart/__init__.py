@@ -1,7 +1,7 @@
 # Automated, robust apt-get mirror selection for Debian and Ubuntu.
 #
 # Author: martin68 and Peter Odding
-# Last Change: September 15, 2019
+# Last Change: May 31, 2020
 # URL: https://apt-smart.readthedocs.io
 
 """
@@ -31,14 +31,24 @@ except ImportError:
 from capturer import CaptureOutput
 from executor.contexts import ChangeRootContext, LocalContext
 from humanfriendly import AutomaticSpinner, Timer, compact, format_timespan, pluralize
-from property_manager import (
-    PropertyManager,
-    cached_property,
-    key_property,
-    lazy_property,
-    mutable_property,
-    set_property,
-)
+try:
+    from property_manager3 import (
+        PropertyManager,
+        cached_property,
+        key_property,
+        lazy_property,
+        mutable_property,
+        set_property,
+    )
+except ImportError:
+    from property_manager import (
+        PropertyManager,
+        cached_property,
+        key_property,
+        lazy_property,
+        mutable_property,
+        set_property,
+    )
 from six import text_type
 from six.moves.urllib.parse import urlparse
 
@@ -48,13 +58,10 @@ from apt_smart.releases import coerce_release
 from apt_smart.releases import discover_releases
 
 # Semi-standard module versioning.
-__version__ = '7.0.7'
-
-MAIN_SOURCES_LIST = '/etc/apt/sources.list'
-"""The absolute pathname of the list of configured APT data sources (a string)."""
+__version__ = '7.1.3'
 
 SOURCES_LIST_ENCODING = 'UTF-8'
-"""The text encoding of :data:`MAIN_SOURCES_LIST` (a string)."""
+"""The text encoding of :attr:`main_sources_list` (a string)."""
 
 MAX_MIRRORS = 50
 """A sane default value for :attr:`AptMirrorUpdater.max_mirrors`."""
@@ -132,15 +139,20 @@ class AptMirrorUpdater(PropertyManager):
             logger.info("Adding BASE_URL mirror:")
             if self.distributor_id == 'debian':  # For Debian, base_url typically is not in MIRRORS_URL,
                 # add it explicitly
-                base_url_prefix = self.backend.BASE_URL.split('dists/codename-updates/InRelease')[0]
+                base_url_prefix = self.backend.BASE_URL.split('/dists/codename-updates/Release')[0]
                 mirrors.add(CandidateMirror(mirror_url=base_url_prefix, updater=self))
             elif self.distributor_id == 'ubuntu':  # For Ubuntu, base_url is not in MIRRORS_URL for
                 # some countries e.g. US (found it in Travis CI), add it explicitly
-                base_url_prefix = self.backend.BASE_URL.split('dists/codename-security/InRelease')[0]
+                base_url_prefix = self.backend.BASE_URL.split('/dists/codename-security/Release')[0]
+                mirrors.add(CandidateMirror(mirror_url=base_url_prefix, updater=self))
+            elif self.distributor_id == 'linuxmint':  # For Linux Mint, base_url typically is not in MIRRORS_URL,
+                # add it explicitly
+                base_url_prefix = self.backend.BASE_URL.split('/dists/codename/Release')[0]
                 mirrors.add(CandidateMirror(mirror_url=base_url_prefix, updater=self))
             logger.info(base_url_prefix)
             for candidate in self.backend.discover_mirrors():
-                if any(fnmatch.fnmatch(candidate.mirror_url, pattern) for pattern in self.blacklist):
+                if any(fnmatch.fnmatch(candidate.mirror_url, pattern) for pattern in self.blacklist)\
+                        and normalize_mirror_url(candidate.mirror_url) != base_url_prefix:
                     logger.warning("Ignoring blacklisted mirror %s.", candidate.mirror_url)
                 else:
                     candidate.updater = self
@@ -225,16 +237,20 @@ class AptMirrorUpdater(PropertyManager):
         """
         return LocalContext()
 
-    @cached_property
+    @mutable_property(cached=True)
     def current_mirror(self):
         """
-        The URL of the main mirror in use in :data:`MAIN_SOURCES_LIST` (a string).
+        The URL of the main mirror in use in :attr:`main_sources_list` (a string).
 
         The :attr:`current_mirror` property's value is computed using
-        :func:`find_current_mirror()`.
+        :func:`find_current_mirror()`, but can be changed and cached by :func:`distribution_codename`
+        for Linux Mint's Ubuntu Mode.
         """
-        logger.debug("Parsing %s to find current mirror of %s ..", MAIN_SOURCES_LIST, self.context)
-        return find_current_mirror(self.get_sources_list())
+        if self.ubuntu_mode and self.distribution_codename:  # :func:`distribution_codename` will set current_mirror
+            return self.current_mirror
+        else:
+            logger.debug("Parsing %s to find current mirror of %s ..", self.main_sources_list, self.context)
+            return find_current_mirror(self.get_sources_list())
 
     @mutable_property
     def distribution_codename_old(self):
@@ -268,11 +284,16 @@ class AptMirrorUpdater(PropertyManager):
             tokens = line.split()
             if (len(tokens) >= 4
                     and tokens[0] in ('deb', 'deb-src')
-                    and tokens[1].startswith(('http://', 'https://', 'ftp://'))
+                    and tokens[1].startswith(('http://', 'https://', 'ftp://', 'mirror://'))
                     and 'main' in tokens[3:]):
                 matches = [release for release in discover_releases() if tokens[2].lower() in release.codename.lower()]
                 if len(matches) != 1:
                     continue
+                if self.ubuntu_mode and matches[0].distributor_id == 'linuxmint':
+                    self.current_mirror = tokens[1]
+                    continue
+                if self.ubuntu_mode:
+                    logging.info("In Ubuntu Mode, pretend to be %s" % coerce_release(tokens[2]))
                 return tokens[2]
         raise EnvironmentError("Failed to determine the distribution codename using apt's package resource list!")
 
@@ -291,6 +312,21 @@ class AptMirrorUpdater(PropertyManager):
         """
         return self.release.distributor_id
 
+    @cached_property
+    def main_sources_list(self):
+        """
+        The absolute pathname of the list of configured APT data sources (a string).
+
+        For new version of Linux Mint, main_sources_list is:
+        /etc/apt/sources.list.d/official-package-repositories.list
+        """
+        if self.context.exists('/etc/apt/sources.list.d/official-package-repositories.list'):
+            logger.debug("/etc/apt/sources.list.d/official-package-repositories.list exists,\
+                         use it as main_sources_list instead of /etc/apt/sources.list")
+            return '/etc/apt/sources.list.d/official-package-repositories.list'
+        else:
+            return '/etc/apt/sources.list'
+
     @mutable_property
     def max_mirrors(self):
         """Limits the number of mirrors to rank (a number, defaults to :data:`MAX_MIRRORS`)."""
@@ -304,6 +340,15 @@ class AptMirrorUpdater(PropertyManager):
         Specify the length of chars in mirrors' URL to display when using --list-mirrors
         """
         return URL_CHAR_LEN
+
+    @mutable_property
+    def ubuntu_mode(self):
+        """
+        For Linux Mint, deal with upstream Ubuntu mirror instead of Linux Mint mirror if True
+
+        Default is False, can be set True via -U, --ubuntu flag
+        """
+        return False
 
     @mutable_property
     def old_releases_url(self):
@@ -390,6 +435,10 @@ class AptMirrorUpdater(PropertyManager):
             raise Exception("It looks like all %s are unavailable!" % num_mirrors)
         if all(c.is_updating for c in mirrors):
             logger.warning("It looks like all %s are being updated?!", num_mirrors)
+        # blacklist BASE_URL mirror if matches blacklist pattern
+        if any(fnmatch.fnmatch(mapping[self.base_url].mirror_url, pattern) for pattern in self.blacklist):
+            logger.warning("Ignoring blacklisted BASE_URL mirror %s.", mapping[self.base_url].mirror_url)
+            mirrors.remove(mapping[self.base_url])
         return sorted(mirrors, key=lambda c: c.sort_key, reverse=True)
 
     @cached_property
@@ -441,13 +490,20 @@ class AptMirrorUpdater(PropertyManager):
         if release_is_eol is None:
             release_is_eol = (self.validate_mirror(self.security_url) == MirrorStatus.MAYBE_EOL)
             source = "security mirror"
+        if release_is_eol and self.distributor_id == 'linuxmint':
+            logger.info(
+                "%s seems EOL (based on %s), but for Linux Mint no OLD_RELEASES_URL, so act as not EOL.",
+                self.release, source,
+            )
+            release_is_eol = False
+            return release_is_eol
         if release_is_eol:  # Still need to check due to
             # https://github.com/xolox/python-apt-mirror-updater/issues/9
             logger.info("%s seems EOL, checking %s MirrorStatus to confirm.", self.release, self.old_releases_url)
             release_is_eol = (self.validate_mirror(self.old_releases_url) == MirrorStatus.AVAILABLE)
             if not release_is_eol:
                 source = "%s is not available" % self.old_releases_url
-        logger.debug(
+        logger.info(
             "%s is %s (based on %s).", self.release,
             "EOL" if release_is_eol else "supported", source,
         )
@@ -516,7 +572,7 @@ class AptMirrorUpdater(PropertyManager):
 
     def change_mirror(self, new_mirror=None, update=True):
         """
-        Change the main mirror in use in :data:`MAIN_SOURCES_LIST`.
+        Change the main mirror in use in :attr:`main_sources_list`.
 
         :param new_mirror: The URL of the new mirror (a string, defaults to
                            :attr:`best_mirror`).
@@ -534,7 +590,7 @@ class AptMirrorUpdater(PropertyManager):
             logger.info("Selected mirror: %s", new_mirror)
         # Parse /etc/apt/sources.list to replace the old mirror with the new one.
         sources_list = self.get_sources_list()
-        mirrors_to_replace = [normalize_mirror_url(find_current_mirror(sources_list))]
+        mirrors_to_replace = [normalize_mirror_url(self.current_mirror)]
         if self.release_is_eol:
             # When a release goes EOL the security updates mirrors stop
             # serving that release as well, so we need to remove them.
@@ -579,11 +635,12 @@ class AptMirrorUpdater(PropertyManager):
         )
         logger.info("Successfully cleared package list cache of %s in %s.", self.context, timer)
 
-    def create_chroot(self, directory, arch=None):
+    def create_chroot(self, directory, codename=None, arch=None):
         """
         Bootstrap a basic Debian or Ubuntu system using debootstrap_.
 
         :param directory: The pathname of the target directory (a string).
+        :param codename: The codename of the target (a string).
         :param arch: The target architecture (a string or :data:`None`).
         :returns: A :class:`~executor.contexts.ChangeRootContext` object.
 
@@ -595,7 +652,7 @@ class AptMirrorUpdater(PropertyManager):
         """
         logger.debug("Checking if chroot already exists (%s) ..", directory)
         if self.context.exists(directory) and self.context.list_entries(directory):
-            logger.debug("The chroot already exists, skipping initialization.")
+            logger.info("The chroot already exists, skipping initialization.")
             first_run = False
         else:
             # Ensure the `debootstrap' program is installed.
@@ -604,16 +661,49 @@ class AptMirrorUpdater(PropertyManager):
                 self.context.execute('apt-get', 'install', '--yes', 'debootstrap', sudo=True)
             # Use the `debootstrap' program to create the chroot.
             timer = Timer()
-            logger.info("Creating %s chroot in %s ..", self.release, directory)
             debootstrap_command = ['debootstrap']
             if arch:
                 debootstrap_command.append('--arch=%s' % arch)
-            debootstrap_command.append('--keyring=%s' % self.release.keyring_file)
-            debootstrap_command.append(self.distribution_codename)
+            release_chroot = None
+            keyring_chroot = ''
+            codename_chroot = ''
+            best_mirror_chroot = None
+            generate_sources_list_chroot = None
+            if codename and codename != self.distribution_codename:
+                updater_chroot = AptMirrorUpdater()
+                updater_chroot.distribution_codename = codename
+                if updater_chroot.distributor_id == 'linuxmint':
+                    msg = "It seems no sense to create chroot of Linux Mint, " \
+                          "please specify a codename of Ubuntu or Debian " \
+                          "to create chroot."
+                    raise ValueError(msg)
+
+                if not self.context.exists(updater_chroot.release.keyring_file):
+                    if updater_chroot.distributor_id == 'ubuntu':
+                        self.context.execute('apt-get', 'install', '--yes', 'ubuntu-keyring', sudo=True)
+                    elif updater_chroot.distributor_id == 'debian':
+                        self.context.execute('apt-get', 'install', '--yes', 'debian-archive-keyring', sudo=True)
+                release_chroot = updater_chroot.release
+                keyring_chroot = updater_chroot.release.keyring_file
+                codename_chroot = codename
+                best_mirror_chroot = updater_chroot.best_mirror
+            else:
+                if self.distributor_id == 'linuxmint':
+                    msg = "It seems no sense to create chroot of Linux Mint, " \
+                          "please use -C to specify a codename of Ubuntu or Debian " \
+                          "to create chroot."
+                    raise ValueError(msg)
+                release_chroot = self.release
+                keyring_chroot = self.release.keyring_file
+                codename_chroot = self.distribution_codename
+                best_mirror_chroot = self.best_mirror
+            logger.info("Creating %s chroot in %s ..", release_chroot, directory)
+            debootstrap_command.append('--keyring=%s' % keyring_chroot)
+            debootstrap_command.append(codename_chroot)
             debootstrap_command.append(directory)
-            debootstrap_command.append(self.best_mirror)
+            debootstrap_command.append(best_mirror_chroot)
             self.context.execute(*debootstrap_command, sudo=True)
-            logger.info("Took %s to create %s chroot.", timer, self.release)
+            logger.info("Took %s to create %s chroot.", timer, release_chroot)
             first_run = True
         # Switch the execution context to the chroot and reset the locale (to
         # avoid locale warnings emitted by post-installation scripts run by
@@ -626,6 +716,13 @@ class AptMirrorUpdater(PropertyManager):
         # invalidated by switching the execution context.
         del self.current_mirror
         del self.stable_mirror
+        if codename and codename != self.distribution_codename:
+            updater_chroot.context = self.context
+            del updater_chroot.current_mirror
+            del updater_chroot.stable_mirror
+            generate_sources_list_chroot = updater_chroot.generate_sources_list()
+        else:
+            generate_sources_list_chroot = self.generate_sources_list()
         # The following initialization only needs to happen on the first
         # run, but it requires the context to be set to the chroot.
         if first_run:
@@ -638,7 +735,9 @@ class AptMirrorUpdater(PropertyManager):
             self.context.execute('apt-get', 'clean', sudo=True)
             # Install a suitable /etc/apt/sources.list file. The logic behind
             # generate_sources_list() depends on the `lsb_release' program.
-            self.install_sources_list(self.generate_sources_list())
+            logger.debug("sources.list for chroot generated:")
+            logger.debug(generate_sources_list_chroot)
+            self.install_sources_list(generate_sources_list_chroot)
             # Make sure the package lists are up to date.
             self.smart_update()
         return self.context
@@ -679,7 +778,7 @@ class AptMirrorUpdater(PropertyManager):
     @mutable_property
     def get_sources_list_options(self):
         """
-        Get the contents of [options] in :data:`MAIN_SOURCES_LIST`.
+        Get the contents of [options] in :attr:`main_sources_list`.
 
         [options] can be set into sources.list, e.g.
         deb [arch=amd64] http://mymirror/ubuntu bionic main restricted
@@ -693,7 +792,7 @@ class AptMirrorUpdater(PropertyManager):
 
     def get_sources_list(self):
         """
-        Get the contents of :data:`MAIN_SOURCES_LIST`.
+        Get the contents of :attr:`main_sources_list`.
 
         :returns: A Unicode string.
 
@@ -703,7 +802,7 @@ class AptMirrorUpdater(PropertyManager):
         Feedback is welcome :-).
         This code strips [options] from sources.list, stores it in :attr:`get_sources_list_options`
         """
-        contents = self.context.read_file(MAIN_SOURCES_LIST)
+        contents = self.context.read_file(self.main_sources_list)
         contents = contents.decode(SOURCES_LIST_ENCODING)
         sources_list_options = {}
         contents_raw = []  # stripped contents without options
@@ -751,7 +850,7 @@ class AptMirrorUpdater(PropertyManager):
         """
         if isinstance(contents, text_type):
             contents = contents.encode(SOURCES_LIST_ENCODING)
-        logger.info("Installing new %s ..", MAIN_SOURCES_LIST)
+        logger.info("Installing new %s ..", self.main_sources_list)
         with self.context:
             # Write the sources.list contents to a temporary file. We make sure
             # the file always ends in a newline to adhere to UNIX conventions.
@@ -761,14 +860,21 @@ class AptMirrorUpdater(PropertyManager):
             # Make sure the temporary file is cleaned up when we're done with it.
             self.context.cleanup('rm', '--force', temporary_file)
             # Make a backup copy of /etc/apt/sources.list in case shit hits the fan?
-            if self.context.exists(MAIN_SOURCES_LIST):
-                backup_copy = '%s.save.%i' % (MAIN_SOURCES_LIST, time.time())
-                logger.info("Backing up contents of %s to %s ..", MAIN_SOURCES_LIST, backup_copy)
-                self.context.execute('cp', MAIN_SOURCES_LIST, backup_copy, sudo=True)
+            if self.context.exists(self.main_sources_list):
+                dirname, basename = os.path.split(self.main_sources_list)
+                if basename == 'official-package-repositories.list':
+                    backup_dir = os.path.join(dirname, 'backup_by_apt-smart')  # Backup to dir for Linux Mint
+                    if not self.context.exists(backup_dir):
+                        self.context.execute('mkdir', backup_dir, sudo=True)
+                    backup_copy = '%s.backup.%i' % (os.path.join(backup_dir, basename), time.time())
+                else:
+                    backup_copy = '%s.backup.%i' % (self.main_sources_list, time.time())
+                logger.info("Backing up contents of %s to %s ..", self.main_sources_list, backup_copy)
+                self.context.execute('cp', self.main_sources_list, backup_copy, sudo=True)
             # Move the temporary file into place without changing ownership and permissions.
             self.context.execute(
                 'cp', '--no-preserve=mode,ownership',
-                temporary_file, MAIN_SOURCES_LIST,
+                temporary_file, self.main_sources_list,
                 sudo=True,
             )
 
@@ -917,11 +1023,11 @@ class CandidateMirror(PropertyManager):
     @mutable_property
     def is_available(self):
         """
-        :data:`True` if :attr:`release_gpg_contents` contains the expected header, :data:`False` otherwise.
+        :data:`True` if :attr:`release_gpg_contents` contains the expected data, :data:`False` otherwise.
 
         The value of this property is computed by checking whether
-        :attr:`release_gpg_contents` contains the expected ``BEGIN PGP
-        MESSAGE`` header. This may seem like a rather obscure way of
+        :attr:`release_gpg_contents` contains the expected data.
+        This may seem like a rather obscure way of
         validating a mirror, but it was specifically chosen to detect
         all sorts of ways in which mirrors can be broken:
 
@@ -934,12 +1040,12 @@ class CandidateMirror(PropertyManager):
         """
         value = False
         if self.release_gpg_contents:
-            value = b'BEGIN PGP SIGNED MESSAGE' in self.release_gpg_contents
+            value = b'Date:' in self.release_gpg_contents
             if not value:
-                logger.debug("Missing GPG header, considering mirror unavailable (%s).", self.release_gpg_url)
+                logger.debug("Missing data, considering mirror unavailable (%s).", self.release_gpg_url)
             else:
                 # Get all data following "Date: "
-                date_string_raw = self.release_gpg_contents.decode().split("Date: ", 1)
+                date_string_raw = self.release_gpg_contents.decode('utf-8').split("Date: ", 1)
                 if len(date_string_raw) == 2:  # split succussfully using "Date: "
                     # Get only date string like "Sun, 25 Aug 2019 23:35:36 UTC", drop other data
                     date_string = date_string_raw[1].split("\n")[0]
@@ -995,7 +1101,7 @@ class CandidateMirror(PropertyManager):
     @mutable_property
     def release_gpg_url(self):
         """
-        The URL of the ``InRelease`` file that will be used to test the mirror (a string or :data:`None`).
+        The URL of the ``Release`` file that will be used to test the mirror (a string or :data:`None`).
 
         The value of this property is based on :attr:`mirror_url` and the
         :attr:`~AptMirrorUpdater.distribution_codename` property of the
@@ -1003,11 +1109,15 @@ class CandidateMirror(PropertyManager):
         """
         if self.updater and self.updater.distribution_codename:
             if self.updater.distributor_id == 'ubuntu':
-                return '%s/dists/%s-security/InRelease' % (
+                return '%s/dists/%s-security/Release' % (
                     self.mirror_url, self.updater.distribution_codename,
                 )
             elif self.updater.distributor_id == 'debian':
-                return '%s/dists/%s-updates/InRelease' % (
+                return '%s/dists/%s-updates/Release' % (
+                    self.mirror_url, self.updater.distribution_codename,
+                )
+            elif self.updater.distributor_id == 'linuxmint':
+                return '%s/dists/%s/Release' % (
                     self.mirror_url, self.updater.distribution_codename,
                 )
 
@@ -1063,7 +1173,7 @@ def find_current_mirror(sources_list):
     Find the URL of the main mirror that is currently in use by ``apt-get``.
 
     :param sources_list: The contents of apt's package resource list, e.g. the
-                         contents of :data:`MAIN_SOURCES_LIST` (a string).
+                         contents of :attr:`main_sources_list` (a string).
     :returns: The URL of the main mirror in use (a string).
     :raises: If the main mirror can't be determined
              :exc:`~exceptions.EnvironmentError` is raised.
@@ -1079,7 +1189,7 @@ def find_current_mirror(sources_list):
         tokens = line.split()
         if (len(tokens) >= 4
                 and tokens[0] in ('deb', 'deb-src')
-                and tokens[1].startswith(('http://', 'https://', 'ftp://'))
+                and tokens[1].startswith(('http://', 'https://', 'ftp://', 'mirror://'))
                 and 'main' in tokens[3:]):
             return tokens[1]
     raise EnvironmentError("Failed to determine current mirror in apt's package resource list!")

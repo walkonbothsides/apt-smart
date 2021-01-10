@@ -11,6 +11,41 @@ to `semantic versioning`_.
 .. _Keep a Changelog: http://keepachangelog.com/
 .. _semantic versioning: http://semver.org/
 
+`Release 7.1.3`_ (2020-5-31)
+-----------------------------
+
+- Support 'mirror://' scheme: https://github.com/martin68/apt-smart/issues/3
+- Update releases.py bundled Releases by running 'make releases', related https://github.com/martin68/apt-smart/issues/4
+- In python2 decode() default encoding is ascii, causing https://github.com/martin68/apt-smart/issues/5 , specify utf-8
+- Fix current_mirror in linuxmint's ubuntu mode, causing -U -c 'mirror_url' changed linuxmint's mirror_url instead of ubuntu's
+
+.. _Release 7.1.3: https://github.com/martin68/apt-smart/compare/7.1.3...7.1.3
+
+`Release 7.1.2`_ (2019-11-28)
+-----------------------------
+
+- Support Python 3.8
+- Add `-C --codename` flag to create chroot with a distribution codename.
+- Blacklist BASE_URL mirror if matches blacklist pattern, this helps when BASE_URL (official) mirror is the only up-to-date one and you find it so slow that you'd like to blacklist it.
+
+.. _Release 7.1.2: https://github.com/martin68/apt-smart/compare/7.1.1...7.1.2
+
+`Release 7.1.1`_ (2019-11-04)
+-----------------------------
+
+- For Linux Mint, backup official-package-repositories.list to backup_dir: backup_by_apt-smart
+- In Readme, add install commands for Linux Mint and a note about run with sudo
+
+.. _Release 7.1.1: https://github.com/martin68/apt-smart/compare/7.1.0...7.1.1
+
+`Release 7.1.0`_ (2019-11-01)
+-----------------------------
+
+- Add support for Linux Mint
+- Add -U, --ubuntu to opt in Ubuntu mode for Linux Mint to deal with upstream Ubuntu mirror instead of Linux Mint mirror. e.g. --auto-change-mirror --ubuntu will auto-change Linux Mint's upstream Ubuntu mirror
+
+.. _Release 7.1.0: https://github.com/martin68/apt-smart/compare/7.0.7...7.1.0
+
 `Release 7.0.7`_ (2019-9-30)
 ----------------------------
 

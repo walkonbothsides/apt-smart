@@ -1,5 +1,5 @@
-apt-smart: Smart, automated Debian/Ubuntu mirror selection
-============================================================
+apt-smart: Smart, automated Debian/Ubuntu/Linux Mint mirror selection
+=====================================================================
 
 .. image:: https://travis-ci.org/martin68/apt-smart.svg?branch=master
    :target: https://travis-ci.org/martin68/apt-smart
@@ -10,10 +10,10 @@ apt-smart: Smart, automated Debian/Ubuntu mirror selection
 `简体中文 <https://github.com/martin68/apt-smart/blob/master/README-zh-cn.rst>`_
 
 The `apt-smart` package automates robust apt-get_ mirror (a.k.a Repositories, Sources) selection for
-Debian_ and Ubuntu_ by enabling smart discovery of available mirrors, smart ranking of
+Debian_ , Ubuntu_ and `Linux Mint`_ by enabling smart discovery of available mirrors, smart ranking of
 available mirrors, automatic switching between mirrors and robust package list
 updating (see features_). It's currently tested on Python 2.7, 3.4, 3.5,
-3.6, 3.7 and PyPy (although test coverage is still rather low, see status_).
+3.6, 3.7, 3.8 and PyPy (although test coverage is still rather low, see status_).
 
 .. contents::
    :local:
@@ -24,7 +24,7 @@ Why?
 As a successor of `apt-mirror-updater <https://github.com/xolox/python-apt-mirror-updater>`_,
 `apt-smart` has many improvements in intelligence, speed, accuracy and robustness (see changelog_) when offering the best mirror for you.
 It has a plan to optionally be a set-and-forget smart daemon: running in the background as a reverse proxy
-always redirecting to the best mirror without root privilege. It also has a plan to support other distros like: Linux Mint , ROS...
+always redirecting to the best mirror without root privilege. It also has a plan to support other distros like: Linux Mint (Done!) , ROS...
 
 .. _features:
 
@@ -32,10 +32,10 @@ Features
 --------
 
 **Smart discovery of available mirrors**
- Debian_ and Ubuntu_ mirrors are discovered automatically by querying the
+ Debian_ , Ubuntu_ and `Linux Mint`_ mirrors are discovered automatically by querying the
  `Debian mirror list <https://www.debian.org/mirror/list>`_ or the `Ubuntu
  mirror list1 <http://mirrors.ubuntu.com/mirrors.txt>`_  or the `Ubuntu
- mirror list2 <https://launchpad.net/ubuntu/+archivemirrors>`_ (the applicable
+ mirror list2 <https://launchpad.net/ubuntu/+archivemirrors>`_ or the `Linux Mint mirror list <https://linuxmint.com/mirrors.php>`_ (the applicable
  mirror list is automatically selected based on the current platform).
  It can smartly get mirrors within the country which the user is in.
 
@@ -108,7 +108,7 @@ should be as simple as (paste all below commands together into terminal):
 .. code-block:: sh
 
    sudo apt update
-   sudo apt install python-pip -y  # install python-pip without asking
+   sudo apt install python-pip python-setuptools python-wheel -y  # install python-pip and so on without asking
    pip install --user apt-smart  # --user flag means install to per user site-packages directory(see below)
    echo "export PATH=\$(python -c 'import site; print(site.USER_BASE + \"/bin\")'):\$PATH" >> ~/.bashrc
    source ~/.bashrc  # set per user site-packages directory to PATH
@@ -119,6 +119,20 @@ user site-packages directory`_, `virtual environments`_ or just installing
 system wide) and I have no intention of getting into that discussion here, so
 if this intimidates you then read up on your options before returning to these
 instructions ;-).
+
+If a new version of apt-smart has been released, you can upgrade it via:
+
+.. code-block:: sh
+
+  pip install --user apt-smart --upgrade
+
+**Note**. ``apt-smart`` is a *helper* for the ``apt`` tool. It is **NOT** a
+*replacement* for ``apt`` (or for ``apt-get``). So, ``apt-smart`` should
+*not* be run *instead* of either of those commands. Nor should
+``apt-smart`` be run with ``sudo`` or via ``su``; if ``apt-smart``
+happens to need root privilege in order for it to continue (in order
+that it may, for example, change ``sources.list``), then it will prompt
+for a password.
 
 Usage
 -----
@@ -170,6 +184,8 @@ updating.
    "``-u``, ``--update``, ``--update-package-lists``","Update the package lists using ""apt-get update"", retrying on failure and
    automatically switch to a different mirror when it looks like the current
    mirror is being updated."
+   "``-U``, ``--ubuntu``","Ubuntu mode for Linux Mint to deal with upstream Ubuntu mirror instead of Linux Mint mirror.
+   e.g. ``--auto-change-mirror`` ``--ubuntu`` will auto-change Linux Mint's upstream Ubuntu mirror"
    "``-x``, ``--exclude=PATTERN``","Add a pattern to the mirror selection blacklist. ``PATTERN`` is expected to be
    a shell pattern (containing wild cards like ""?"" and ""\*"") that is matched
    against the full URL of each mirror."
@@ -226,7 +242,7 @@ License
 
 This software is licensed under the `MIT license`_.
 
-© 2019 martin68
+© 2020 martin68
 
 © 2018 Peter Odding.
 
@@ -240,6 +256,7 @@ This software is licensed under the `MIT license`_.
 .. _Debian: https://en.wikipedia.org/wiki/Debian
 .. _documentation: https://apt-smart.readthedocs.io
 .. _GitHub: https://github.com/martin68/apt-smart
+.. _Linux Mint: https://linuxmint.com
 .. _MIT license: http://en.wikipedia.org/wiki/MIT_License
 .. _per user site-packages directory: https://www.python.org/dev/peps/pep-0370/
 .. _PyPI: https://pypi.python.org/pypi/apt-smart
